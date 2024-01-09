@@ -170,7 +170,8 @@ We can fetch the API definition under `/api/v1/openapi.json`
             }
         }
     }
-}```
+}
+```
 
 ## Serve
 
