@@ -17,6 +17,13 @@ In this proof of concept I am trying to find out the feasibility of finding deta
     * `async` support
     * Small overhead and high performance
 
+## Configuration
+
+* `setup.conf`
+    * Mandatory.
+    * Modeled upon `setup.conf.example`.
+    * There is just one parameter to set: `aws_region`.
+
 ## API
 
 * `GET /ping`
