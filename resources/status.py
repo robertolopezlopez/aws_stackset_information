@@ -1,82 +1,111 @@
-# resources/status.py
-import logging
 from datetime import datetime
-
 import boto3
-import falcon
-from botocore.exceptions import EndpointConnectionError, NoCredentialsError
+import numpy as np
+import logging
+from fastapi import HTTPException, APIRouter, Depends
 
 from config import load_config
 
+router = APIRouter()
 
-class StatusResource:
-    def __init__(self):
-        self.config = self.load_and_validate_config()
-        self.logger = logging.getLogger(__name__)
+# Setup logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler()
+handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
-    def load_and_validate_config(self):
-        config = load_config()
-        if 'AWS' not in config or 'aws_region' not in config['AWS']:
-            self.logger.error("Invalid AWS configuration.")
-            raise falcon.HTTPInternalServerError(description="Invalid AWS configuration.")
-        return config
 
-    def get_aws_info(self):
-        try:
-            return self.config['AWS']['aws_region']
+def load_and_validate_config():
+    config = load_config()
+    if 'AWS' not in config or 'aws_region' not in config['AWS']:
+        raise HTTPException(
+            status_code=500,
+            detail="Invalid AWS configuration."
+        )
+    return config
 
-        except Exception as e:
-            # Handle the exception appropriately for your application
-            self.logger.error(f"Error getting AWS config: {e}")
-            return None, None, None
 
-    def on_get(self, req, resp):
-        try:
-            # Retrieve stack_set_id from query parameters
-            stack_set_id = req.get_param('stack_set_id')
-            if not stack_set_id:
-                raise falcon.HTTPBadRequest("Missing stack_set_id", "The 'stack_set_id' query parameter is required.")
+@router.get("/status", response_model=dict, tags=["status"])
+async def get_status(
+        stack_set_id: str,
+        num_requests: int = 1,
+        config: dict = Depends(load_and_validate_config),
+):
+    try:
+        logger.info("status.py#get_status()")
+        
+        aws_region = config['AWS']['aws_region']
 
+        cloudformation = boto3.client(
+            'cloudformation', region_name=aws_region,
+            endpoint_url=f'https://cloudformation.{aws_region}.amazonaws.com'
+        )
+
+        total_durations = []
+        accounts = None
+
+        logger.info(f"Processing {num_requests} requests for stack set {stack_set_id}.")
+
+        for i in range(num_requests):
             start_time = datetime.now()
+            logger.debug(f"Request {i + 1}: Start time - {start_time}")
 
-            # Fetch aws region from server.conf
-            aws_region = self.get_aws_info()
-
-            # Explicitly set the CloudFormation endpoint
-            try:
-                cloudformation = boto3.client(
-                    'cloudformation', region_name=aws_region,
-                    endpoint_url=f'https://cloudformation.{aws_region}.amazonaws.com')
-
-            except (EndpointConnectionError, NoCredentialsError) as boto3_error:
-                self.logger.error(f"Boto3 error: {boto3_error}")
-                raise falcon.HTTPInternalServerError(description="Failed to initialize AWS connection.")
-
-            # List all stack instances for the specified stack set
             response = cloudformation.list_stack_instances(StackSetName=stack_set_id)
-            aws_account_ids = list(set())
+            if i == 0:
+                aws_account_ids = []
 
-            for stack_instance in response.get('Summaries', []):
-                account_id = stack_instance.get('Account', '')
-                if account_id:
-                    aws_account_ids.append(account_id)
-            aws_account_ids = list(set(aws_account_ids))
+                for stack_instance in response.get('Summaries', []):
+                    account_id = stack_instance.get('Account', '')
+                    if account_id:
+                        aws_account_ids.append(account_id)
+
+                accounts = aws_account_ids
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds() * 1000  # Convert to milliseconds
+            logger.debug(f"Request {i + 1}: End time - {end_time}, Duration - {duration} ms")
 
-            if aws_account_ids:
-                # Create the response JSON
-                response_data = {
-                    'accounts': aws_account_ids,
-                    'duration': duration
-                }
+            total_durations.append(duration)
 
-                resp.media = response_data
-                resp.status = falcon.HTTP_200
-            else:
-                raise falcon.HTTPInternalServerError(description="Failed to retrieve stack information.")
+        logger.info(f"Requests processed. Calculating additional metrics.")
 
-        except falcon.HTTPError as e:
-            resp.media = {'error': str(e)}
-            resp.status = e.status
+        if not total_durations:
+            raise HTTPException(
+                status_code=500,
+                detail="No duration data available."
+            )
+
+        # Create the response JSON
+        response_data = {
+            'accounts': accounts,
+            'avg': (np.mean(total_durations)),
+            'median': (np.median(total_durations)),
+            'min': (np.min(total_durations)),
+            'max': (np.max(total_durations)),
+            'percentile_25': (np.percentile(total_durations, 25)),
+            'percentile_75': (np.percentile(total_durations, 75)),
+            'total': (np.sum(total_durations))
+        }
+
+        logger.info(f"Additional metrics calculated.")
+
+        logger.info(f"Response generated successfully: {response_data}")
+
+        return response_data
+
+    except HTTPException as e:
+        logger.error(f"HTTPException: {e}")
+        raise e
+    except Exception as e:
+        logger.error(f"Internal Server Error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal Server Error: {str(e)}"
+        )
+
+
+
+
