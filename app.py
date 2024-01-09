@@ -12,7 +12,7 @@ except FileNotFoundError as e:
     print(f"Error: {e}")
     exit(1)
 
-app = FastAPI()
+app = FastAPI(openapi_url="/api/v1/openapi.json", root_path='/api/v1')
 
 app.include_router(ping_router, tags=["ping"])
 app.include_router(status_router, prefix="/status", tags=["status"])

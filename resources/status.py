@@ -28,7 +28,7 @@ def load_and_validate_config():
     return config
 
 
-@router.get("/status", response_model=dict, tags=["status"])
+@router.get("", response_model=dict, tags=["status"])
 async def get_status(
         stack_set_id: str,
         num_requests: int = 1,
