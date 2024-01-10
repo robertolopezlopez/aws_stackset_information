@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 import boto3
 import numpy as np
@@ -18,7 +19,7 @@ handler.setFormatter(formatter)
 logger.addHandler(handler)
 
 
-def load_and_validate_config():
+async def load_and_validate_config():
     config = load_config()
     if 'AWS' not in config or 'aws_region' not in config['AWS']:
         raise HTTPException(
@@ -36,7 +37,7 @@ async def get_status(
 ):
     try:
         logger.info("status.py#get_status()")
-        
+
         aws_region = config['AWS']['aws_region']
 
         cloudformation = boto3.client(
@@ -46,29 +47,43 @@ async def get_status(
 
         total_durations = []
         accounts = None
+        errors = {}
 
         logger.info(f"Processing {num_requests} requests for stack set {stack_set_id}.")
 
-        for i in range(num_requests):
+        async def process_request(i):
+            nonlocal errors
+
             start_time = datetime.now()
             logger.debug(f"Request {i + 1}: Start time - {start_time}")
 
-            response = cloudformation.list_stack_instances(StackSetName=stack_set_id)
-            if i == 0:
-                aws_account_ids = []
+            try:
+                response = await asyncio.to_thread(cloudformation.list_stack_instances, StackSetName=stack_set_id)
+                nonlocal accounts
 
-                for stack_instance in response.get('Summaries', []):
-                    account_id = stack_instance.get('Account', '')
-                    if account_id:
-                        aws_account_ids.append(account_id)
+                if i == 0:
+                    aws_account_ids = []
 
-                accounts = aws_account_ids
+                    for stack_instance in response.get('Summaries', []):
+                        account_id = stack_instance.get('Account', '')
+                        if account_id:
+                            aws_account_ids.append(account_id)
 
-            end_time = datetime.now()
-            duration = (end_time - start_time).total_seconds() * 1000  # Convert to milliseconds
-            logger.debug(f"Request {i + 1}: End time - {end_time}, Duration - {duration} ms")
+                    accounts = aws_account_ids
 
-            total_durations.append(duration)
+            except Exception as e:
+                logger.error(f"Error in AWS API call: {e}")
+                errors[str(e)] = errors.get(str(e), 0) + 1
+            finally:
+                end_time = datetime.now()
+                duration = (end_time - start_time).total_seconds() * 1000  # Convert to milliseconds
+                logger.debug(f"Request {i + 1}: End time - {end_time}, Duration - {duration} ms")
+
+                total_durations.append(duration)
+
+        logger.info('before await')
+        tasks = [asyncio.create_task(process_request(i)) for i in range(num_requests)]
+        await asyncio.gather(*tasks)
 
         logger.info(f"Requests processed. Calculating additional metrics.")
 
@@ -87,7 +102,8 @@ async def get_status(
             'max': (np.max(total_durations)),
             'percentile_25': (np.percentile(total_durations, 25)),
             'percentile_75': (np.percentile(total_durations, 75)),
-            'total': (np.sum(total_durations))
+            'total': (np.sum(total_durations)),
+            'errors': errors,
         }
 
         logger.info(f"Additional metrics calculated.")
@@ -105,7 +121,3 @@ async def get_status(
             status_code=500,
             detail=f"Internal Server Error: {str(e)}"
         )
-
-
-
-
