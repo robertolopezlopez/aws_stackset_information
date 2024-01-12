@@ -1,11 +1,11 @@
 import asyncio
 from datetime import datetime
-import boto3
 import numpy as np
 import logging
 from fastapi import HTTPException, APIRouter, Depends
 
 from config import load_config
+from cloud_ifs import list_stack_instances
 
 router = APIRouter()
 
@@ -38,13 +38,6 @@ async def get_status(
     try:
         logger.info("status.py#get_status()")
 
-        aws_region = config['AWS']['aws_region']
-
-        cloudformation = boto3.client(
-            'cloudformation', region_name=aws_region,
-            endpoint_url=f'https://cloudformation.{aws_region}.amazonaws.com'
-        )
-
         total_durations = []
         accounts = None
         errors = {}
@@ -58,7 +51,7 @@ async def get_status(
             logger.debug(f"Request {i + 1}: Start time - {start_time}")
 
             try:
-                response = await asyncio.to_thread(cloudformation.list_stack_instances, StackSetName=stack_set_id)
+                response = await list_stack_instances(config['AWS']['aws_region'], stack_set_id)
                 nonlocal accounts
 
                 if i == 0:
@@ -102,6 +95,8 @@ async def get_status(
             'max': (np.max(total_durations)),
             'percentile_25': (np.percentile(total_durations, 25)),
             'percentile_75': (np.percentile(total_durations, 75)),
+            'percentile_90': (np.percentile(total_durations, 90)),
+            'percentile_95': (np.percentile(total_durations, 95)),
             'total': (np.sum(total_durations)),
             'errors': errors,
         }
