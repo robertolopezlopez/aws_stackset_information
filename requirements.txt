@@ -4,7 +4,6 @@
 #
 #    pip-compile requirements.in
 #
-
 aiohappyeyeballs==2.4.3
     # via aiohttp
 aiohttp==3.10.10
@@ -31,7 +30,7 @@ frozenlist==1.4.1
     # via
     #   aiohttp
     #   aiosignal
-h11==0.14.0
+h11==0.16.0
     # via uvicorn
 idna==3.7
     # via
